@@ -3,7 +3,6 @@ package benchmarking
 import (
 	"database/sql"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 )
@@ -11,22 +10,22 @@ import (
 type Worker struct {
 	instance int
 	db       *sql.DB
-	in       chan []string
+	In       chan []string
 	out      chan time.Duration
 	errCh    chan error
-	group    *sync.WaitGroup
+	wg       *sync.WaitGroup
 }
 
-func NewWorker(instance int, db *sql.DB, rows chan []string, out chan time.Duration, errCh chan error, group *sync.WaitGroup) *Worker {
-	log.Println("instantiating worker ", instance)
+func NewWorker(instance int, db *sql.DB, in chan []string, out chan time.Duration, errCh chan error, wg *sync.WaitGroup) *Worker {
+	fmt.Printf("instantiating worker %d\n", instance)
 
 	return &Worker{
 		instance: instance,
 		db:       db,
-		in:       rows,
+		In:       in,
 		out:      out,
 		errCh:    errCh,
-		group:    group,
+		wg:       wg,
 	}
 }
 
@@ -44,27 +43,31 @@ group by
 	host,
 	DATE_TRUNC('minute', ts);`
 
-func (w *Worker) BenchmarkQuery() {
-	log.Println("running worker ", w.instance)
+func (w *Worker) Process() {
+	fmt.Printf("running worker %d\n", w.instance)
 
-	for v := range w.in {
+	for v := range w.In {
 		t0 := time.Now()
 
 		hostname := v[0]
 		startTime := v[1]
 		endTime := v[2]
 
-		_, err := w.db.Query(queryCpuUsage, hostname, startTime, endTime)
+		var (
+			h    string
+			date time.Time
+			max  string
+			min  string
+		)
+		err := w.db.QueryRow(queryCpuUsage, hostname, startTime, endTime).Scan(&h, &date, &max, &min)
 		if err != nil {
-			fmt.Println("error ", err)
 			w.errCh <- err
 			continue
 		}
 
-		fmt.Printf("running for host %s - instance %d\n", v[0], w.instance)
 		t1 := time.Now()
-
 		w.out <- t1.Sub(t0)
 	}
-	w.group.Done()
+
+	w.wg.Done()
 }

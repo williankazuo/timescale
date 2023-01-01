@@ -1,49 +1,81 @@
 package benchmarking
 
 import (
-	"database/sql"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
 
 type Benchmarking struct {
-	processed chan bool
-	pool      map[int]*Worker
 	out       chan time.Duration
-	wg        *sync.WaitGroup
+	errCh     <-chan error
+	wgWorkers *sync.WaitGroup
+	done      chan<- bool
 }
 
-func NewBenchmarking(processed chan bool, numOfWorkers int, db *sql.DB, rows chan []string, errCh chan error) *Benchmarking {
-	out := make(chan time.Duration)
-	pool := make(map[int]*Worker)
-	var wg sync.WaitGroup
-	wg.Add(numOfWorkers)
-
-	for i := 0; i < numOfWorkers; i++ {
-		w := NewWorker(i+1, db, rows, out, errCh, &wg)
-		pool[i+1] = w
-	}
-
+func NewBenchmarking(out chan time.Duration, errCh <-chan error, wgWorkers *sync.WaitGroup, done chan<- bool) *Benchmarking {
 	return &Benchmarking{
-		processed: processed,
-		pool:      pool,
 		out:       out,
-		wg:        &wg,
+		errCh:     errCh,
+		wgWorkers: wgWorkers,
+		done:      done,
 	}
 }
 
-func (b *Benchmarking) Process() {
-	for _, v := range b.pool {
-		go v.BenchmarkQuery()
-	}
+func (b *Benchmarking) CollectResults() {
+	var (
+		totalQueries    = 0
+		totalProcessing time.Duration
+		minQueryTime    time.Duration
+		medianQueryTime time.Duration
+		avgQueryTime    time.Duration
+		maxQueryTime    time.Duration
+		results         []time.Duration
+	)
 
+	var wgCollected sync.WaitGroup
 	go func() {
+		wgCollected.Add(1)
 		for r := range b.out {
-			fmt.Println("aa", r)
+			totalProcessing += r
+			results = append(results, r)
 		}
+		wgCollected.Done()
 	}()
 
-	b.wg.Wait()
-	close(b.processed)
+	b.wgWorkers.Wait()
+	close(b.out)
+	wgCollected.Wait()
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i] < results[j]
+	})
+
+	totalQueries = len(results)
+	minQueryTime = results[0]
+	avgQueryTime = totalProcessing / time.Duration(totalQueries)
+	maxQueryTime = results[totalQueries-1]
+	if totalQueries%2 == 0 {
+		medianQueryTime = (results[totalQueries/2-1] + results[totalQueries/2]) / 2
+	} else {
+		medianQueryTime = results[totalQueries/2]
+	}
+
+	fmt.Printf("--------------\n")
+	fmt.Printf("Number of queries: %d\n", totalQueries)
+	fmt.Printf("Total processing time all queries: %s\n", totalProcessing)
+	fmt.Printf("Minimum query time: %s\n", minQueryTime)
+	fmt.Printf("Median query time: %s\n", medianQueryTime)
+	fmt.Printf("Average query time: %s\n", avgQueryTime)
+	fmt.Printf("Maximum query time: %s\n", maxQueryTime)
+	fmt.Printf("--------------\n")
+
+	b.done <- true
+}
+
+func (b *Benchmarking) CollectErrors() {
+	for e := range b.errCh {
+		fmt.Println("error ", e.Error())
+	}
 }

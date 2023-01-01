@@ -1,4 +1,4 @@
-version: '3'
+version: "3.8"
 
 services:
   database:
@@ -8,3 +8,26 @@ services:
       - POSTGRES_PASSWORD=password
     ports:
       - 5432:5432
+    volumes:
+      - ./populate.sh:/docker-entrypoint-initdb.d/populate.sh
+      - ./input:/input
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres && psql -U postgres -lqtA | grep -q \"^homework|\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  benchmarking:
+    build: .
+    environment:
+      - DB_HOST=database
+      - DB_NAME=homework
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+    command: "./bench -workers=2 -filepath=/input/query_params.csv"
+    volumes:
+      - ./input:/input
+    depends_on:
+      database:
+        condition: service_healthy
